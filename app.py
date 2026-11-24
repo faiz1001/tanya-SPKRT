@@ -119,7 +119,7 @@ if user_prompt := st.chat_input("Ketik pertanyaan Anda di sini..."):
     with st.chat_message("assistant"):
         try:
             model = genai.GenerativeModel(
-                model_name="gemini-4-hydrogen",
+                model_name="gemini-3.8-flash",
                 system_instruction=system_instruction,
                 generation_config={"temperature": 0.0}
             )
