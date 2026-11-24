@@ -17,8 +17,12 @@ except Exception:
     st.error("API Key belum disetel di Streamlit Secrets!")
     st.stop()
 
-# 2. Fungsi Load Dokumen per Halaman (Agar Tidak Boros Kuota)
-@st.cache_resource
+# Daftar kata umum bahasa Indonesia yang diabaikan saat pencarian agar lebih akurat & cepat
+STOPWORDS = {"apa", "siapa", "dimana", "kapan", "mengapa", "bagaimana", "yang", "dari", 
+             "dan", "di", "ke", "ini", "itu", "untuk", "pada", "adalah", "dengan"}
+
+# 2. Fungsi Load Dokumen (Disimpan di Cache agar tidak dibaca berulang-ulang)
+@st.cache_resource(show_spinner="Sedang memuat dokumen pedoman...")
 def load_and_index_documents(folder_name):
     pages_data = []
     file_list = []
@@ -43,9 +47,10 @@ def load_and_index_documents(folder_name):
             except Exception as e:
                 st.warning(f"Gagal membaca {filename}: {e}")
                 
-    # Tokenisasi sederhana untuk BM25
+    # Tokenisasi corpus untuk BM25
     tokenized_corpus = [
-        re.findall(r"\w+", p["text"].lower()) for p in pages_data
+        [w for w in re.findall(r"\w+", p["text"].lower()) if w not in STOPWORDS]
+        for p in pages_data
     ]
     bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
     
@@ -59,12 +64,12 @@ if not pages_data:
     st.error(f"Tidak ditemukan file PDF di dalam folder '{target_folder}'.")
     st.stop()
 
-# Tampilkan daftar dokumen di sidebar
+# Sidebar
 with st.sidebar:
     st.header("📂 Dokumen yang Tersedia:")
     for f in loaded_files:
         st.write(f"- 📄 {f}")
-    st.write(f"Total halaman terindeks: **{len(pages_data)} halaman**")
+    st.write(f"Total: **{len(pages_data)} halaman** siap dicari.")
 
 # 3. Riwayat Chat
 if "messages" not in st.session_state:
@@ -80,48 +85,55 @@ if user_prompt := st.chat_input("Ketik pertanyaan Anda di sini..."):
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
-    # 5. Cari 5 Halaman Paling Relevan Saja (Sangat Hemat Kuota)
-    query_tokens = re.findall(r"\w+", user_prompt.lower())
+    # 5. Cari 3 Halaman Paling Relevan Saja (Sangat Cepat & Tepat Sasaran)
+    raw_tokens = re.findall(r"\w+", user_prompt.lower())
+    query_tokens = [w for w in raw_tokens if w not in STOPWORDS]
     top_chunks = []
     
     if bm25 and query_tokens:
         scores = bm25.get_scores(query_tokens)
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:5]
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:3]
         for idx in top_indices:
             top_chunks.append(pages_data[idx])
     else:
-        top_chunks = pages_data[:3]
+        top_chunks = pages_data[:2]
 
-    # Gabungkan potongan teks yang relevan saja
+    # Format konteks
     relevant_context = ""
     for c in top_chunks:
         relevant_context += f"\n--- Dari File: {c['file']} (Halaman {c['page']}) ---\n{c['text']}\n"
 
-    # Instruksi Ketat ke AI
     system_instruction = f"""
-    Anda adalah asisten khusus pedoman SPKRT. Jawablah pertanyaan pengguna HANYA berdasarkan potongan dokumen berikut:
+    Anda adalah asisten pedoman SPKRT. Jawablah pertanyaan HANYA berdasarkan teks berikut:
 
     {relevant_context}
 
     ATURAN:
-    1. Jawab HANYA menggunakan informasi yang ada di atas.
-    2. Sebutkan nama file dokumen dan nomor halamannya saat memberikan jawaban.
-    3. Jika jawabannya tidak ada di potongan teks di atas, jawab dengan jujur:
+    1. Berikan jawaban secara langsung, padat, dan jelas tanpa pengantar yang panjang.
+    2. Wajib sebutkan nama file dokumen dan nomor halamannya di awal atau akhir jawaban.
+    3. Jika jawabannya tidak ada di teks di atas, cukup katakan:
        "Maaf, informasi tersebut tidak ditemukan dalam pedoman yang relevan."
-    4. Jangan mengarang atau berasumsi di luar teks di atas.
     """
 
+    # 6. Tampilkan Respon Menggunakan Streaming (Instan Kata demi Kata)
     with st.chat_message("assistant"):
-        with st.spinner("Mencari jawaban di halaman yang relevan..."):
-            try:
-                model = genai.GenerativeModel(
-                    model_name="gemini-4-hydrogen",
-                    system_instruction=system_instruction,
-                    generation_config={"temperature": 0.0}
-                )
-                response = model.generate_content(user_prompt)
-                answer = response.text
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-            except Exception as err:
-                st.error(f"Terjadi kesalahan: {err}")
+        try:
+            model = genai.GenerativeModel(
+                model_name="gemini-4-hydrogen",
+                system_instruction=system_instruction,
+                generation_config={"temperature": 0.0}
+            )
+            
+            # generate_content dengan stream=True agar teks langsung mengalir keluar
+            response = model.generate_content(user_prompt, stream=True)
+            
+            def stream_generator():
+                for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
+
+            full_response = st.write_stream(stream_generator)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            
+        except Exception as err:
+            st.error(f"Terjadi kesalahan: {err}")
