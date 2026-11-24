@@ -1,11 +1,12 @@
 import streamlit as st
 import google.generativeai as genai
 from pypdf import PdfReader
+from rank_bm25 import BM25Okapi
 import os
+import re
 
-# Pengaturan Judul Website
-st.set_page_config(page_title="Tanya AI Seputar SPKRT 1809", page_icon="📚")
-st.title("📚 Tanya Jawab Banyak Dokumen")
+st.set_page_config(page_title="AI Tanya Dokumen SPKRT", page_icon="📚")
+st.title("📚 Tanya Jawab Pedoman SPKRT")
 st.caption("AI ini mencari jawaban dari kumpulan dokumen pedoman SPKRT.")
 
 # 1. Konfigurasi API Key
@@ -16,46 +17,54 @@ except Exception:
     st.error("API Key belum disetel di Streamlit Secrets!")
     st.stop()
 
-# 2. Fungsi Membaca SEMUA File PDF di dalam Folder
+# 2. Fungsi Load Dokumen per Halaman (Agar Tidak Boros Kuota)
 @st.cache_resource
-def load_all_pdfs(folder_name="Sumber_dokumen"):
-    combined_text = ""
+def load_and_index_documents(folder_name):
+    pages_data = []
     file_list = []
     
     if not os.path.exists(folder_name):
-        return "", []
+        return [], [], None
         
     for filename in os.listdir(folder_name):
         if filename.lower().endswith(".pdf"):
             file_path = os.path.join(folder_name, filename)
+            file_list.append(filename)
             try:
                 reader = PdfReader(file_path)
-                pdf_text = ""
-                for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        pdf_text += extracted + "\n"
-                
-                # Beri label nama file agar AI tahu sumbernya
-                combined_text += f"\n\n=== SUMBER DARI FILE: {filename} ===\n{pdf_text}"
-                file_list.append(filename)
+                for page_idx, page in enumerate(reader.pages):
+                    text = page.extract_text()
+                    if text and text.strip():
+                        pages_data.append({
+                            "file": filename,
+                            "page": page_idx + 1,
+                            "text": text
+                        })
             except Exception as e:
-                st.warning(f"Gagal membaca file {filename}: {e}")
+                st.warning(f"Gagal membaca {filename}: {e}")
                 
-    return combined_text, file_list
+    # Tokenisasi sederhana untuk BM25
+    tokenized_corpus = [
+        re.findall(r"\w+", p["text"].lower()) for p in pages_data
+    ]
+    bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+    
+    return pages_data, file_list, bm25
 
-# Load seluruh isi folder
-document_content, loaded_files = load_all_pdfs("Sumber_dokumen")
+# Deteksi folder
+target_folder = "Sumber_dokumen" if os.path.exists("Sumber_dokumen") else "sumber_dokumen"
+pages_data, loaded_files, bm25 = load_and_index_documents(target_folder)
 
-if not document_content:
-    st.error("Tidak ditemukan file PDF di dalam folder 'Sumber_dokumen'. Silakan upload file terlebih dahulu.")
+if not pages_data:
+    st.error(f"Tidak ditemukan file PDF di dalam folder '{target_folder}'.")
     st.stop()
 
-# Tampilkan daftar dokumen yang tersedia di sidebar samping
+# Tampilkan daftar dokumen di sidebar
 with st.sidebar:
     st.header("📂 Dokumen yang Tersedia:")
     for f in loaded_files:
         st.write(f"- 📄 {f}")
+    st.write(f"Total halaman terindeks: **{len(pages_data)} halaman**")
 
 # 3. Riwayat Chat
 if "messages" not in st.session_state:
@@ -71,23 +80,39 @@ if user_prompt := st.chat_input("Ketik pertanyaan Anda di sini..."):
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
-    # 5. Instruksi AI (System Prompt)
-    system_instruction = f"""
-    Anda adalah asisten AI yang bertugas menjawab pertanyaan publik HANYA berdasarkan kumpulan dokumen yang diberikan.
+    # 5. Cari 5 Halaman Paling Relevan Saja (Sangat Hemat Kuota)
+    query_tokens = re.findall(r"\w+", user_prompt.lower())
+    top_chunks = []
     
-    ATURAN KETAT:
-    1. Jawab HANYA menggunakan informasi dari teks dokumen di bawah.
-    2. Jika jawabannya TIDAK ADA dalam dokumen mana pun, katakan persis seperti ini:
-       "Maaf, informasi tersebut tidak ditemukan dalam dokumen sumber yang tersedia."
-    3. Jika jawabannya ADA, sebutkan dari nama file dokumen mana Anda menemukan jawaban tersebut (contoh: 'Berdasarkan dokumen SOP_2024.pdf...').
-    4. Dilarang mengarang atau menggunakan pengetahuan luar.
+    if bm25 and query_tokens:
+        scores = bm25.get_scores(query_tokens)
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:5]
+        for idx in top_indices:
+            top_chunks.append(pages_data[idx])
+    else:
+        top_chunks = pages_data[:3]
 
-    KUMPULAN DOKUMEN SUMBER:
-    {document_content}
+    # Gabungkan potongan teks yang relevan saja
+    relevant_context = ""
+    for c in top_chunks:
+        relevant_context += f"\n--- Dari File: {c['file']} (Halaman {c['page']}) ---\n{c['text']}\n"
+
+    # Instruksi Ketat ke AI
+    system_instruction = f"""
+    Anda adalah asisten khusus pedoman SPKRT. Jawablah pertanyaan pengguna HANYA berdasarkan potongan dokumen berikut:
+
+    {relevant_context}
+
+    ATURAN:
+    1. Jawab HANYA menggunakan informasi yang ada di atas.
+    2. Sebutkan nama file dokumen dan nomor halamannya saat memberikan jawaban.
+    3. Jika jawabannya tidak ada di potongan teks di atas, jawab dengan jujur:
+       "Maaf, informasi tersebut tidak ditemukan dalam pedoman yang relevan."
+    4. Jangan mengarang atau berasumsi di luar teks di atas.
     """
 
     with st.chat_message("assistant"):
-        with st.spinner("Mencari jawaban di seluruh dokumen..."):
+        with st.spinner("Mencari jawaban di halaman yang relevan..."):
             try:
                 model = genai.GenerativeModel(
                     model_name="gemini-4-hydrogen",
