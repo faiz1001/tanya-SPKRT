@@ -18,7 +18,7 @@ except Exception:
 
 # 2. Fungsi Membaca SEMUA File PDF di dalam Folder
 @st.cache_resource
-def load_all_pdfs(folder_name="sumber_dokumen"):
+def load_all_pdfs(folder_name="Sumber_dokumen"):
     combined_text = ""
     file_list = []
     
@@ -45,10 +45,10 @@ def load_all_pdfs(folder_name="sumber_dokumen"):
     return combined_text, file_list
 
 # Load seluruh isi folder
-document_content, loaded_files = load_all_pdfs("sumber_dokumen")
+document_content, loaded_files = load_all_pdfs("Sumber_dokumen")
 
 if not document_content:
-    st.error("Tidak ditemukan file PDF di dalam folder 'sumber_dokumen'. Silakan upload file terlebih dahulu.")
+    st.error("Tidak ditemukan file PDF di dalam folder 'Sumber_dokumen'. Silakan upload file terlebih dahulu.")
     st.stop()
 
 # Tampilkan daftar dokumen yang tersedia di sidebar samping
