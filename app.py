@@ -90,7 +90,7 @@ if user_prompt := st.chat_input("Ketik pertanyaan Anda di sini..."):
         with st.spinner("Mencari jawaban di seluruh dokumen..."):
             try:
                 model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
+                    model_name="gemini-4-hydrogen",
                     system_instruction=system_instruction,
                     generation_config={"temperature": 0.0}
                 )
