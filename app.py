@@ -6,8 +6,8 @@ import os
 import re
 
 st.set_page_config(page_title="AI Tanya Dokumen SPKRT", page_icon="📚")
-st.title("📚 Tanya Jawab Pedoman SPKRT")
-st.caption("AI ini mencari jawaban dari kumpulan dokumen pedoman SPKRT.")
+st.title("📚 Tanya-Tanya Seputar SPKRT")
+st.caption("Gunakan pertanyaan yang jelas")
 
 # 1. Konfigurasi API Key
 try:
